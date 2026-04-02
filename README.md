@@ -56,6 +56,10 @@ So: **billing and service record = WHMCS; technical secrets = Cipi unless you in
 
 The module does **not** stop the site on Cipi: there is nothing to call. Instead, `Suspend` / `Unsuspend` return **success** so WHMCS updates client and portal state correctly (otherwise an error string would block suspend in admin). With **Module Log** enabled you get a note that no API call was made.
 
+## Support
+
+This module is **under active development** and will evolve over time. For any problem, question, or customisation, contact the developer: **Andrea Pollastri** — [https://web.ap.it](https://web.ap.it).
+
 ## License
 
 MIT
