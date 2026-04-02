@@ -1,65 +1,152 @@
-# WHMCS · Cipi server module
+<p align="center">
+  <img src="https://cipi.sh/cipi-logo.png" alt="Cipi" width="120">
+</p>
 
-WHMCS provisioning module that talks to the [Cipi](https://cipi.sh/docs) control plane REST API via [`cipi-sh/api`](https://github.com/cipi-sh/api).
+<h1 align="center">Cipi Server Module for WHMCS</h1>
+
+<p align="center">
+  Provision and manage <a href="https://cipi.sh">Cipi</a>-hosted apps directly from WHMCS billing.<br>
+  Bridges the WHMCS provisioning lifecycle to the <a href="https://github.com/cipi-sh/api">Cipi REST API</a>.
+</p>
+
+<p align="center">
+  <a href="https://github.com/cipi-sh/whmcs/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cipi-sh/whmcs?style=flat-square" alt="License"></a>
+  <a href="https://github.com/cipi-sh/whmcs/releases"><img src="https://img.shields.io/github/v/release/cipi-sh/whmcs?style=flat-square&label=release" alt="Release"></a>
+  <img src="https://img.shields.io/badge/WHMCS-8.x-blue?style=flat-square" alt="WHMCS 8.x">
+  <img src="https://img.shields.io/badge/PHP-8.2%2B-777BB4?style=flat-square&logo=php&logoColor=white" alt="PHP 8.2+">
+</p>
+
+---
+
+## Overview
+
+This module integrates [Cipi](https://cipi.sh/docs) — a modern Laravel hosting control panel — into WHMCS as a **Server provisioning module**. It allows you to automate app creation and deletion for your hosting customers through the Cipi REST API.
+
+### What it does
+
+| Action | API call | Behaviour |
+| --- | --- | --- |
+| **Test Connection** | `GET /api/apps` | Validates token and API reachability |
+| **Create Account** | `POST /api/apps` | Provisions a Cipi app (Laravel or custom); waits for async job if `202` |
+| **Suspend / Unsuspend** | *none* | Returns success so WHMCS updates billing state (Cipi has no suspend endpoint) |
+| **Terminate Account** | `DELETE /api/apps/{name}` | Removes the app; waits for async job if `202` |
+
+### What it does *not* manage
+
+Editing apps, SSL certificates, aliases, extra databases, Supervisor workers, deploy triggers, or anything beyond the create/delete lifecycle. Those remain in the Cipi dashboard, CI pipeline, or require extending this module.
+
+---
 
 ## Requirements
 
-- WHMCS 8.x (provisioning module type “Server”)
-- Cipi server with API enabled: `cipi api <domain>` and `cipi api ssl` on the VPS
-- Sanctum token with the required abilities (e.g. `apps-create`, `apps-view`, `apps-delete`, `deploy-manage`, `ssl-manage` depending on what you expose to billing)
+- **WHMCS 8.x** (provisioning module type "Server")
+- **Cipi server** with the API enabled:
+  ```bash
+  cipi api <domain>
+  cipi api ssl
+  ```
+- **Sanctum Bearer token** with the required abilities:
+  `apps-create` · `apps-view` · `apps-delete` · `deploy-manage` (minimum for full lifecycle)
+
+---
 
 ## Installation
 
-1. Copy `modules/servers/cipi/` into your WHMCS root (`modules/servers/cipi/`).
-2. In **WHMCS Admin → System Settings → Servers → Add New Server**:
-   - **Type**: Cipi (Laravel hosting)
-   - **Hostname**: API base URL, e.g. `https://api.example.com` (no trailing slash)
-   - **Password**: paste the Bearer token (`cipi api token create` on the server, with required abilities)
-   - **Secure**: yes (TLS)
-3. Create a **hosting product** linked to this server and set **Module Settings** (PHP, app type, Git SSH URL, branch).
+1. Copy the `modules/servers/cipi/` folder into your WHMCS root:
 
-## App types this module can provision
+   ```
+   your-whmcs/
+   └── modules/
+       └── servers/
+           └── cipi/
+               ├── cipi.php
+               └── lib/
+                   └── CipiApiClient.php
+   ```
 
-Cipi supports two creation modes; this module maps both via the product **Module Setting “App Type”** (`configoption2`).
+2. In **WHMCS Admin > System Settings > Servers > Add New Server**:
 
-| App type in WHMCS | Cipi CLI equivalent | What gets created | Git / deploy |
+   | Field | Value |
+   | --- | --- |
+   | **Type** | Cipi (Laravel hosting) |
+   | **Hostname** | API base URL, e.g. `https://api.example.com` *(no trailing slash)* |
+   | **Password** | Bearer token from `cipi api token create` |
+   | **Secure** | Yes *(recommended — enables TLS verification)* |
+
+3. Create a **Hosting Product** linked to this server and configure the **Module Settings**:
+
+   | Setting | Description | Default |
+   | --- | --- | --- |
+   | PHP Version | `8.2` / `8.3` / `8.4` / `8.5` | `8.5` |
+   | App Type | `laravel` or `custom` | `laravel` |
+   | Git Repository (SSH) | Required for Laravel; optional for custom | — |
+   | Git Branch | Branch to deploy | `main` |
+
+---
+
+## App types
+
+Cipi supports two creation modes. This module maps both via the **App Type** product setting (`configoption2`).
+
+| App Type | Cipi equivalent | Stack | Git / Deploy |
 | --- | --- | --- | --- |
-| **laravel** (default) | `cipi app create` | Full Laravel stack: isolated Linux user, PHP-FPM pool, Nginx vhost, MariaDB, Supervisor workers, Deployer `releases/` + `shared/.env`, cron, deploy key | **SSH repository URL required**; branch from settings |
-| **custom** | `cipi app create --custom` | Custom site: `htdocs`, Nginx + PHP for static/SPA/WordPress/other PHP; **no** Laravel Deployer layout, **no** DB/workers/cron unless you add them separately | Optional: leave **Git Repository** empty for **SFTP-only** (Cipi 4.4.4+), or set repo for Git deploy into `htdocs` |
+| **laravel** *(default)* | `cipi app create` | Isolated Linux user, PHP-FPM pool, Nginx vhost, MariaDB, Supervisor workers, Deployer `releases/` + `shared/.env`, cron, deploy key | SSH repository URL **required**; branch from settings |
+| **custom** | `cipi app create --custom` | `htdocs/` directory, Nginx + PHP — ideal for static sites, SPAs, WordPress, or generic PHP apps | **Optional**: leave Git Repository empty for **SFTP-only** hosting (Cipi 4.4.4+), or set a repo for Git-based deploy into `htdocs/` |
 
-**Not managed by this module:** editing apps (`cipi app edit`), SSL (`cipi ssl install`), aliases, databases beyond the Laravel default, workers, or deploy triggers — those stay in Cipi/CI or require extending the module or using the Cipi API elsewhere.
+---
 
-## Customer-facing output (what the end user sees)
+## Customer-facing behaviour
 
-This module does **not** add a **Client Area** tab, custom buttons, or live status from Cipi. Customers only get what **WHMCS** shows by default for a hosting/service product:
+This module does **not** add a Client Area tab, custom buttons, or live status from Cipi. Customers see only the standard WHMCS service view:
 
-| What the customer sees | Notes |
+| Visible to customer | Notes |
 | --- | --- |
-| **Service details** | Domain, service status (Active / Suspended), renewal dates — normal WHMCS client area |
-| **Username** | The WHMCS **service username** (mapped to the Cipi Linux user name after sanitization) |
-| **Password field** | WHMCS may show the auto-generated **service password** from provisioning — this is **not** automatically replaced with Cipi’s real SSH password |
-| **Welcome / product emails** | Whatever you configure in WHMCS email templates — they will **not** include Cipi-only data (DB password, deploy key, webhook URL) unless you add **hooks** or custom automation |
+| Service details | Domain, status (Active / Suspended), renewal dates |
+| Username | Mapped to the Cipi Linux user after sanitisation |
+| Password | WHMCS-generated service password *(not the Cipi SSH password)* |
+| Emails | Controlled by WHMCS email templates — Cipi credentials are **not** injected automatically |
 
-**Important:** On the server, `cipi app create` prints **one-time** credentials (SSH password for the app user, DB password, deploy key, webhook, etc.). The REST call used here does not, by itself, push those secrets into WHMCS or customer emails. For production use you should either:
+### About credentials
 
-- Poll the Cipi job/API for details and update the service via a **WHMCS hook** / **Provisioning Module Addon**, or  
-- Deliver credentials through your **support** / **manual** process, or  
-- Extend this module to call `GET /api/apps/{name}` after create and map fields into **custom service fields** (future enhancement).
+When Cipi provisions an app it generates **one-time secrets** (SSH password, DB password, deploy key, webhook URL). The REST API used by this module does **not** automatically push those secrets into WHMCS.
 
-So: **billing and service record = WHMCS; technical secrets = Cipi unless you integrate further.**
+For production use, you should either:
 
-## What the module does
+- **Extend this module** to call `GET /api/apps/{name}` after creation and map credentials to WHMCS custom service fields
+- **Write a WHMCS hook / addon** that polls the Cipi API and updates service records
+- **Deliver credentials manually** through your support workflow
 
-- **Test Connection**: `GET /api/apps` (validates token and reachability).
-- **Create**: `POST /api/apps` — creates a Cipi app aligned with the WHMCS service (service username → Linux app username, sanitized).
-- **Terminate**: `DELETE /api/apps/{name}` — removes the app (async: waits for job when the API returns `202`).
+> **TL;DR** — WHMCS handles billing and the service record; Cipi holds the technical secrets unless you integrate further.
 
-The module does **not** stop the site on Cipi: there is nothing to call. Instead, `Suspend` / `Unsuspend` return **success** so WHMCS updates client and portal state correctly (otherwise an error string would block suspend in admin). With **Module Log** enabled you get a note that no API call was made.
+---
+
+## Module logging
+
+All API calls made by Create and Terminate are logged via `logModuleCall()`. Suspend and Unsuspend log a note that no API call was made. Enable **Module Log** in WHMCS Admin for full visibility.
+
+---
+
+## Project structure
+
+```
+modules/servers/cipi/
+├── cipi.php                  # WHMCS module entry point (hooks + helpers)
+└── lib/
+    └── CipiApiClient.php     # cURL-based HTTP client for the Cipi REST API
+```
+
+No Composer dependencies — the module is a self-contained drop-in.
+
+---
 
 ## Support
 
-This module is **under active development** and will evolve over time. For any problem, question, or customisation, contact the developer: **Andrea Pollastri** — [https://web.ap.it](https://web.ap.it).
+This module is **under active development**. For bugs, questions, or custom integrations:
+
+**Andrea Pollastri** — [web.ap.it](https://web.ap.it)
+
+---
 
 ## License
 
-MIT
+This project is open-sourced under the [MIT License](LICENSE).

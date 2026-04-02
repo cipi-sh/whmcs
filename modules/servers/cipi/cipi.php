@@ -66,7 +66,7 @@ function cipi_ConfigOptions(): array
 function cipi_TestConnection(array $params): array
 {
     try {
-        $client = cipi_buildClientFromServerParams($params);
+        $client = cipi_buildClient($params);
         $client->ping();
         $code = $client->getLastHttpCode();
 
@@ -85,7 +85,7 @@ function cipi_TestConnection(array $params): array
 function cipi_CreateAccount(array $params): string
 {
     try {
-        $client = cipi_buildClientFromServiceParams($params);
+        $client = cipi_buildClient($params);
 
         $appUser = cipi_sanitizeAppUser((string) $params['username']);
         $domain = trim((string) $params['domain']);
@@ -121,6 +121,16 @@ function cipi_CreateAccount(array $params): string
 
         $raw = $client->createApp($payload);
         $decoded = $raw['decoded'];
+        $httpCode = $client->getLastHttpCode();
+
+        if (function_exists('logModuleCall')) {
+            logModuleCall('cipi', 'CreateAccount', $payload, $raw['raw'], $decoded, ['Authorization']);
+        }
+
+        if ($httpCode >= 400) {
+            $apiMsg = is_array($decoded) ? ($decoded['message'] ?? $decoded['error'] ?? '') : '';
+            return 'Cipi API returned HTTP ' . $httpCode . ($apiMsg !== '' ? ': ' . $apiMsg : '');
+        }
 
         if (cipi_asyncAccepted($client)) {
             $jobId = is_array($decoded) ? (string) ($decoded['job_id'] ?? $decoded['id'] ?? '') : '';
@@ -176,12 +186,17 @@ function cipi_UnsuspendAccount(array $params): string
 function cipi_TerminateAccount(array $params): string
 {
     try {
-        $client = cipi_buildClientFromServiceParams($params);
+        $client = cipi_buildClient($params);
         $appUser = cipi_sanitizeAppUser((string) $params['username']);
 
         $raw = $client->deleteApp($appUser);
+        $decoded = $raw['decoded'];
+
+        if (function_exists('logModuleCall')) {
+            logModuleCall('cipi', 'TerminateAccount', ['app' => $appUser], $raw['raw'], $decoded, ['Authorization']);
+        }
+
         if (cipi_asyncAccepted($client)) {
-            $decoded = $raw['decoded'];
             $jobId = is_array($decoded) ? (string) ($decoded['job_id'] ?? $decoded['id'] ?? '') : '';
             if ($jobId !== '') {
                 $wait = $client->waitForJob($jobId);
@@ -199,16 +214,7 @@ function cipi_TerminateAccount(array $params): string
 
 // --- internals ---
 
-function cipi_buildClientFromServerParams(array $params): CipiApiClient
-{
-    $base = (string) ($params['serverhostname'] ?? '');
-    $token = (string) ($params['serverpassword'] ?? '');
-    $secure = ! empty($params['serversecure']);
-
-    return new CipiApiClient($base, $token, $secure);
-}
-
-function cipi_buildClientFromServiceParams(array $params): CipiApiClient
+function cipi_buildClient(array $params): CipiApiClient
 {
     $base = (string) ($params['serverhostname'] ?? '');
     $token = (string) ($params['serverpassword'] ?? '');
@@ -219,7 +225,7 @@ function cipi_buildClientFromServiceParams(array $params): CipiApiClient
 
 function cipi_sanitizeAppUser(string $username): string
 {
-    $u = strtolower(preg_replace('/[^a-z0-9]/', '', $username) ?? '');
+    $u = preg_replace('/[^a-z0-9]/', '', strtolower($username)) ?? '';
     if ($u === '') {
         $u = 'app' . substr(sha1($username), 0, 8);
     }
