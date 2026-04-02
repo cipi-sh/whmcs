@@ -3,10 +3,12 @@
 declare(strict_types=1);
 
 /**
- * Minimal HTTP client for the Cipi REST API (cipi-sh/api).
+ * HTTP client for the Cipi REST API (cipi-sh/api).
+ *
+ * Covers: apps, aliases, databases, SSL, deploy, and async jobs.
  *
  * @see https://github.com/cipi-sh/api
- * @see https://cipi.sh/docs (Advanced → cipi api)
+ * @see https://cipi.sh/docs
  */
 final class CipiApiClient
 {
@@ -37,40 +39,133 @@ final class CipiApiClient
         return $this->lastHttpCode;
     }
 
-    /**
-     * Health check: list apps (requires apps-view or similar read scope on token).
-     */
+    // ── Apps ─────────────────────────────────────────────────────────
+
     public function ping(): array
     {
         return $this->request('GET', '/api/apps');
     }
 
-    /**
-     * @param array<string, mixed> $payload
-     * @return array{raw: string, decoded: mixed}
-     */
+    public function listApps(): array
+    {
+        return $this->request('GET', '/api/apps');
+    }
+
+    public function getApp(string $appName): array
+    {
+        return $this->request('GET', '/api/apps/' . rawurlencode($appName));
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
     public function createApp(array $payload): array
     {
         return $this->requestRaw('POST', '/api/apps', $payload);
     }
 
-    /**
-     * @param array<string, mixed> $payload
-     */
+    /** @return array{raw: string, decoded: mixed} */
     public function editApp(string $appName, array $payload): array
     {
         return $this->requestRaw('PUT', '/api/apps/' . rawurlencode($appName), $payload);
     }
 
+    /** @return array{raw: string, decoded: mixed} */
     public function deleteApp(string $appName): array
     {
         return $this->requestRaw('DELETE', '/api/apps/' . rawurlencode($appName));
     }
 
+    // ── Deploy ───────────────────────────────────────────────────────
+
+    /** @return array{raw: string, decoded: mixed} */
     public function deployApp(string $appName): array
     {
         return $this->requestRaw('POST', '/api/apps/' . rawurlencode($appName) . '/deploy');
     }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function rollbackDeploy(string $appName): array
+    {
+        return $this->requestRaw('POST', '/api/apps/' . rawurlencode($appName) . '/deploy/rollback');
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function unlockDeploy(string $appName): array
+    {
+        return $this->requestRaw('POST', '/api/apps/' . rawurlencode($appName) . '/deploy/unlock');
+    }
+
+    // ── SSL ──────────────────────────────────────────────────────────
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function installSsl(string $appName): array
+    {
+        return $this->requestRaw('POST', '/api/apps/' . rawurlencode($appName) . '/ssl');
+    }
+
+    // ── Aliases ──────────────────────────────────────────────────────
+
+    public function listAliases(string $appName): array
+    {
+        return $this->request('GET', '/api/apps/' . rawurlencode($appName) . '/aliases');
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function addAlias(string $appName, string $alias): array
+    {
+        return $this->requestRaw('POST', '/api/apps/' . rawurlencode($appName) . '/aliases', [
+            'alias' => $alias,
+        ]);
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function removeAlias(string $appName, string $alias): array
+    {
+        return $this->requestRaw(
+            'DELETE',
+            '/api/apps/' . rawurlencode($appName) . '/aliases/' . rawurlencode($alias)
+        );
+    }
+
+    // ── Databases ────────────────────────────────────────────────────
+
+    public function listDatabases(): array
+    {
+        return $this->request('GET', '/api/databases');
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function createDatabase(string $name): array
+    {
+        return $this->requestRaw('POST', '/api/databases', ['name' => $name]);
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function deleteDatabase(string $name): array
+    {
+        return $this->requestRaw('DELETE', '/api/databases/' . rawurlencode($name));
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function backupDatabase(string $name): array
+    {
+        return $this->requestRaw('POST', '/api/databases/' . rawurlencode($name) . '/backup');
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function restoreDatabase(string $name, string $file): array
+    {
+        return $this->requestRaw('POST', '/api/databases/' . rawurlencode($name) . '/restore', [
+            'file' => $file,
+        ]);
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function resetDatabasePassword(string $name): array
+    {
+        return $this->requestRaw('POST', '/api/databases/' . rawurlencode($name) . '/password');
+    }
+
+    // ── Jobs ─────────────────────────────────────────────────────────
 
     public function getJob(string $jobId): array
     {
@@ -99,9 +194,9 @@ final class CipiApiClient
         return ['ok' => false, 'job' => null, 'error' => 'Timeout waiting for job ' . $jobId];
     }
 
-    /**
-     * @return array<string, mixed>
-     */
+    // ── HTTP layer ───────────────────────────────────────────────────
+
+    /** @return array<string, mixed> */
     private function request(string $method, string $path, ?array $json = null): array
     {
         $out = $this->requestRaw($method, $path, $json);

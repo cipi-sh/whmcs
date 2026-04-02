@@ -16,11 +16,14 @@ require_once __DIR__ . '/lib/CipiApiClient.php';
  * - Password: Sanctum Bearer token (create with cipi api token create on the server)
  * - Secure: enable TLS verification (recommended)
  *
- * Token abilities: at minimum apps-create, apps-view, apps-delete, deploy-manage for full lifecycle.
+ * Token abilities required for full functionality:
+ * apps-create, apps-view, apps-delete, apps-edit, deploy-manage, ssl-manage
  *
  * @see https://github.com/cipi-sh/api
  * @see https://developers.whmcs.com/provisioning-modules/
  */
+
+// ── Metadata & Config ────────────────────────────────────────────────
 
 function cipi_MetaData(): array
 {
@@ -60,8 +63,15 @@ function cipi_ConfigOptions(): array
             'Default' => 'main',
             'Description' => 'Branch to deploy',
         ],
+        'Auto SSL' => [
+            'Type' => 'yesno',
+            'Default' => '',
+            'Description' => 'Install Let\'s Encrypt SSL automatically after app creation',
+        ],
     ];
 }
+
+// ── Core lifecycle ───────────────────────────────────────────────────
 
 function cipi_TestConnection(array $params): array
 {
@@ -97,6 +107,7 @@ function cipi_CreateAccount(array $params): string
         $type = strtolower((string) ($params['configoption2'] ?? 'laravel'));
         $repository = trim((string) ($params['configoption3'] ?? ''));
         $branch = trim((string) ($params['configoption4'] ?? 'main')) ?: 'main';
+        $autoSsl = ! empty($params['configoption5']);
 
         $isCustom = $type === 'custom';
         $payload = [
@@ -123,22 +134,21 @@ function cipi_CreateAccount(array $params): string
         $decoded = $raw['decoded'];
         $httpCode = $client->getLastHttpCode();
 
-        if (function_exists('logModuleCall')) {
-            logModuleCall('cipi', 'CreateAccount', $payload, $raw['raw'], $decoded, ['Authorization']);
-        }
+        cipi_log('CreateAccount', $payload, $raw['raw'], $decoded);
 
         if ($httpCode >= 400) {
-            $apiMsg = is_array($decoded) ? ($decoded['message'] ?? $decoded['error'] ?? '') : '';
-            return 'Cipi API returned HTTP ' . $httpCode . ($apiMsg !== '' ? ': ' . $apiMsg : '');
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
         }
 
-        if (cipi_asyncAccepted($client)) {
-            $jobId = is_array($decoded) ? (string) ($decoded['job_id'] ?? $decoded['id'] ?? '') : '';
-            if ($jobId !== '') {
-                $wait = $client->waitForJob($jobId);
-                if (! $wait['ok']) {
-                    return 'Cipi job failed or timed out: ' . ($wait['error'] ?? json_encode($wait['job']));
-                }
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
+        }
+
+        if ($autoSsl) {
+            $sslResult = cipi_doInstallSsl($client, $appUser);
+            if ($sslResult !== 'success') {
+                cipi_log('CreateAccount:AutoSSL', ['app' => $appUser], $sslResult, 'SSL install failed after app creation (app was created).');
             }
         }
 
@@ -150,35 +160,14 @@ function cipi_CreateAccount(array $params): string
 
 function cipi_SuspendAccount(array $params): string
 {
-    // cipi-sh/api: no suspend endpoint (PUT only edits php/branch/repository).
-    // Returning success lets WHMCS mark the service suspended (client area / billing).
-    // For technical shutdown (nginx/workers), extend via hooks or a custom endpoint — see README.
-    if (function_exists('logModuleCall')) {
-        logModuleCall(
-            'cipi',
-            'SuspendAccount',
-            $params,
-            'success',
-            'No Cipi API call (technical suspend not exposed by the API).',
-            []
-        );
-    }
+    cipi_log('SuspendAccount', $params, 'success', 'No Cipi API call (technical suspend not exposed by the API).');
 
     return 'success';
 }
 
 function cipi_UnsuspendAccount(array $params): string
 {
-    if (function_exists('logModuleCall')) {
-        logModuleCall(
-            'cipi',
-            'UnsuspendAccount',
-            $params,
-            'success',
-            'No Cipi API call (technical unsuspend not exposed by the API).',
-            []
-        );
-    }
+    cipi_log('UnsuspendAccount', $params, 'success', 'No Cipi API call (technical unsuspend not exposed by the API).');
 
     return 'success';
 }
@@ -192,18 +181,11 @@ function cipi_TerminateAccount(array $params): string
         $raw = $client->deleteApp($appUser);
         $decoded = $raw['decoded'];
 
-        if (function_exists('logModuleCall')) {
-            logModuleCall('cipi', 'TerminateAccount', ['app' => $appUser], $raw['raw'], $decoded, ['Authorization']);
-        }
+        cipi_log('TerminateAccount', ['app' => $appUser], $raw['raw'], $decoded);
 
-        if (cipi_asyncAccepted($client)) {
-            $jobId = is_array($decoded) ? (string) ($decoded['job_id'] ?? $decoded['id'] ?? '') : '';
-            if ($jobId !== '') {
-                $wait = $client->waitForJob($jobId);
-                if (! $wait['ok']) {
-                    return 'Cipi delete job failed: ' . ($wait['error'] ?? json_encode($wait['job']));
-                }
-            }
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
         }
 
         return 'success';
@@ -212,7 +194,175 @@ function cipi_TerminateAccount(array $params): string
     }
 }
 
-// --- internals ---
+function cipi_ChangePackage(array $params): string
+{
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
+
+        $php = (string) ($params['configoption1'] ?? '');
+        $repository = trim((string) ($params['configoption3'] ?? ''));
+        $branch = trim((string) ($params['configoption4'] ?? ''));
+
+        $payload = [];
+        if ($php !== '') {
+            $payload['php'] = $php;
+        }
+        if ($repository !== '') {
+            $payload['repository'] = $repository;
+        }
+        if ($branch !== '') {
+            $payload['branch'] = $branch;
+        }
+
+        if ($payload === []) {
+            return 'success';
+        }
+
+        $raw = $client->editApp($appUser, $payload);
+        $decoded = $raw['decoded'];
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('ChangePackage', $payload, $raw['raw'], $decoded);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
+        }
+
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
+}
+
+// ── Admin custom buttons ─────────────────────────────────────────────
+
+function cipi_AdminCustomButtonArray(): array
+{
+    return [
+        'Install SSL' => 'installSsl',
+        'Deploy' => 'deploy',
+        'Rollback Deploy' => 'rollbackDeploy',
+        'Unlock Deploy' => 'unlockDeploy',
+        'App Info' => 'appInfo',
+    ];
+}
+
+function cipi_installSsl(array $params): string
+{
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
+
+        return cipi_doInstallSsl($client, $appUser);
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
+}
+
+function cipi_deploy(array $params): string
+{
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
+
+        $raw = $client->deployApp($appUser);
+        $decoded = $raw['decoded'];
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('Deploy', ['app' => $appUser], $raw['raw'], $decoded);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
+        }
+
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
+}
+
+function cipi_rollbackDeploy(array $params): string
+{
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
+
+        $raw = $client->rollbackDeploy($appUser);
+        $decoded = $raw['decoded'];
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('RollbackDeploy', ['app' => $appUser], $raw['raw'], $decoded);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
+        }
+
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
+}
+
+function cipi_unlockDeploy(array $params): string
+{
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
+
+        $raw = $client->unlockDeploy($appUser);
+        $decoded = $raw['decoded'];
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('UnlockDeploy', ['app' => $appUser], $raw['raw'], $decoded);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
+}
+
+function cipi_appInfo(array $params): string
+{
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
+
+        $app = $client->getApp($appUser);
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('AppInfo', ['app' => $appUser], json_encode($app), $app);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($app);
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
+}
+
+// ── Internals ────────────────────────────────────────────────────────
 
 function cipi_buildClient(array $params): CipiApiClient
 {
@@ -236,9 +386,62 @@ function cipi_sanitizeAppUser(string $username): string
     return $u;
 }
 
-function cipi_asyncAccepted(CipiApiClient $client): bool
+/**
+ * If the last API call returned 202, extract the job ID and wait for completion.
+ * Returns an error string on failure, null on success or when not async.
+ */
+function cipi_waitIfAsync(CipiApiClient $client, mixed $decoded): ?string
 {
-    $code = $client->getLastHttpCode();
+    if ($client->getLastHttpCode() !== 202) {
+        return null;
+    }
 
-    return $code === 202;
+    $jobId = is_array($decoded) ? (string) ($decoded['job_id'] ?? $decoded['id'] ?? '') : '';
+    if ($jobId === '') {
+        return null;
+    }
+
+    $wait = $client->waitForJob($jobId);
+    if (! $wait['ok']) {
+        return 'Cipi job failed or timed out: ' . ($wait['error'] ?? json_encode($wait['job']));
+    }
+
+    return null;
+}
+
+function cipi_doInstallSsl(CipiApiClient $client, string $appUser): string
+{
+    $raw = $client->installSsl($appUser);
+    $decoded = $raw['decoded'];
+    $httpCode = $client->getLastHttpCode();
+
+    cipi_log('InstallSSL', ['app' => $appUser], $raw['raw'], $decoded);
+
+    if ($httpCode >= 400) {
+        return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
+    }
+
+    $error = cipi_waitIfAsync($client, $decoded);
+    if ($error !== null) {
+        return $error;
+    }
+
+    return 'success';
+}
+
+function cipi_log(string $action, mixed $request, mixed $response, mixed $processed, array $replaceVars = []): void
+{
+    if (function_exists('logModuleCall')) {
+        logModuleCall('cipi', $action, $request, $response, $processed, $replaceVars);
+    }
+}
+
+function cipi_extractApiMessage(mixed $decoded): string
+{
+    if (! is_array($decoded)) {
+        return '';
+    }
+    $msg = (string) ($decoded['message'] ?? $decoded['error'] ?? '');
+
+    return $msg !== '' ? ': ' . $msg : '';
 }
