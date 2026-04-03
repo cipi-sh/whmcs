@@ -112,9 +112,11 @@ final class CipiApiClient
     /** @return array{raw: string, decoded: mixed} */
     public function addAlias(string $appName, string $alias): array
     {
-        return $this->requestRaw('POST', '/api/apps/' . rawurlencode($appName) . '/aliases', [
-            'alias' => $alias,
-        ]);
+        return $this->requestRaw(
+            'POST',
+            '/api/apps/' . rawurlencode($appName) . '/aliases/' . rawurlencode($alias),
+            null
+        );
     }
 
     /** @return array{raw: string, decoded: mixed} */
@@ -130,31 +132,31 @@ final class CipiApiClient
 
     public function listDatabases(): array
     {
-        return $this->request('GET', '/api/databases');
+        return $this->request('GET', '/api/dbs');
     }
 
     /** @return array{raw: string, decoded: mixed} */
     public function createDatabase(string $name): array
     {
-        return $this->requestRaw('POST', '/api/databases', ['name' => $name]);
+        return $this->requestRaw('POST', '/api/dbs', ['name' => $name]);
     }
 
     /** @return array{raw: string, decoded: mixed} */
     public function deleteDatabase(string $name): array
     {
-        return $this->requestRaw('DELETE', '/api/databases/' . rawurlencode($name));
+        return $this->requestRaw('DELETE', '/api/dbs/' . rawurlencode($name));
     }
 
     /** @return array{raw: string, decoded: mixed} */
     public function backupDatabase(string $name): array
     {
-        return $this->requestRaw('POST', '/api/databases/' . rawurlencode($name) . '/backup');
+        return $this->requestRaw('POST', '/api/dbs/' . rawurlencode($name) . '/backup');
     }
 
     /** @return array{raw: string, decoded: mixed} */
     public function restoreDatabase(string $name, string $file): array
     {
-        return $this->requestRaw('POST', '/api/databases/' . rawurlencode($name) . '/restore', [
+        return $this->requestRaw('POST', '/api/dbs/' . rawurlencode($name) . '/restore', [
             'file' => $file,
         ]);
     }
@@ -162,7 +164,7 @@ final class CipiApiClient
     /** @return array{raw: string, decoded: mixed} */
     public function resetDatabasePassword(string $name): array
     {
-        return $this->requestRaw('POST', '/api/databases/' . rawurlencode($name) . '/password');
+        return $this->requestRaw('POST', '/api/dbs/' . rawurlencode($name) . '/password');
     }
 
     // ── Jobs ─────────────────────────────────────────────────────────
@@ -182,7 +184,7 @@ final class CipiApiClient
         $deadline = time() + $maxWaitSeconds;
         while (time() < $deadline) {
             $job = $this->getJob($jobId);
-            $status = is_array($job) ? ($job['status'] ?? $job['state'] ?? null) : null;
+            $status = self::extractJobStatus($job);
             if (in_array($status, ['completed', 'success', 'failed', 'error'], true)) {
                 $ok = $status === 'completed' || $status === 'success';
 
@@ -192,6 +194,25 @@ final class CipiApiClient
         }
 
         return ['ok' => false, 'job' => null, 'error' => 'Timeout waiting for job ' . $jobId];
+    }
+
+    /**
+     * Job poll responses use `{ "data": { "status": "..." } }` (Cipi API 1.6+).
+     *
+     * @param mixed $job
+     */
+    private static function extractJobStatus(mixed $job): ?string
+    {
+        if (! is_array($job)) {
+            return null;
+        }
+        $top = $job['status'] ?? $job['state'] ?? null;
+        if (is_string($top) && $top !== '') {
+            return $top;
+        }
+        $inner = $job['data'] ?? null;
+
+        return is_array($inner) ? ($inner['status'] ?? $inner['state'] ?? null) : null;
     }
 
     // ── HTTP layer ───────────────────────────────────────────────────
@@ -248,6 +269,8 @@ final class CipiApiClient
             $headers[] = 'Content-Type: application/json';
             $opts[CURLOPT_HTTPHEADER] = $headers;
             $opts[CURLOPT_POSTFIELDS] = $body;
+        } elseif ($method === 'POST' && $json === null) {
+            $opts[CURLOPT_POSTFIELDS] = '';
         }
 
         curl_setopt_array($ch, $opts);

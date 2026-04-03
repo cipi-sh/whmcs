@@ -35,7 +35,12 @@ From the WHMCS admin service view, operators can trigger one-click actions:
 | **Deploy**          | `POST /api/apps/{name}/deploy`          | Trigger a zero-downtime deployment            |
 | **Rollback Deploy** | `POST /api/apps/{name}/deploy/rollback` | Revert to the previous release                |
 | **Unlock Deploy**   | `POST /api/apps/{name}/deploy/unlock`   | Unlock a stuck deployment                     |
+| **List Aliases**    | `GET /api/apps/{name}/aliases`          | Lists aliases; output in Module Log             |
+| **Add Alias**       | `POST /api/apps/{name}/aliases/{alias}` | Uses **Alias domain (admin)**; async job        |
+| **Remove Alias**    | `DELETE …/aliases/{alias}`              | Uses **Alias domain (admin)**; async job        |
 | **App Info**        | `GET /api/apps/{name}`                  | Fetch current app details into the Module Log |
+
+For **Add Alias** and **Remove Alias**, set the product field **Alias domain (admin)** to the full hostname, save the service, then run the button.
 
 ### Auto-SSL on creation
 
@@ -51,7 +56,7 @@ The bundled `CipiApiClient` covers the entire Cipi REST API surface. Even if a f
 | **Deploy**    | `deployApp`, `rollbackDeploy`, `unlockDeploy`                                                                     |
 | **SSL**       | `installSsl`                                                                                                      |
 | **Aliases**   | `listAliases`, `addAlias`, `removeAlias`                                                                          |
-| **Databases** | `listDatabases`, `createDatabase`, `deleteDatabase`, `backupDatabase`, `restoreDatabase`, `resetDatabasePassword` |
+| **Databases** | `listDatabases`, `createDatabase`, … — HTTP paths under `/api/dbs` (aligned with Cipi API 1.6+) |
 | **Jobs**      | `getJob`, `waitForJob`                                                                                            |
 
 ---
@@ -66,14 +71,20 @@ The bundled `CipiApiClient` covers the entire Cipi REST API surface. Even if a f
   ```
 - **Sanctum Bearer token** with the abilities you need:
 
-  | Ability         | Required for              |
-  | --------------- | ------------------------- |
-  | `apps-view`     | Test Connection, App Info |
-  | `apps-create`   | Create Account            |
-  | `apps-edit`     | Change Package            |
-  | `apps-delete`   | Terminate Account         |
-  | `deploy-manage` | Deploy, Rollback, Unlock  |
-  | `ssl-manage`    | Install SSL, Auto-SSL     |
+  | Ability              | Required for                                      |
+  | -------------------- | ------------------------------------------------- |
+  | `apps-view`          | Test Connection, App Info                         |
+  | `apps-create`        | Create Account                                  |
+  | `apps-edit`          | Change Package                                  |
+  | `apps-delete`        | Terminate Account                               |
+  | `deploy-manage`      | Deploy, Rollback, Unlock                        |
+  | `ssl-manage`         | Install SSL, Auto-SSL                           |
+  | `aliases-view`       | List Aliases, `listAliases` in code               |
+  | `aliases-create`     | Add Alias                                         |
+  | `aliases-delete`     | Remove Alias                                      |
+  | `dbs-view` / `dbs-*` | Database list and DB jobs (`GET /api/dbs`, …)   |
+
+  On the Cipi host, **`GET /api/dbs`** runs `sudo cipi db list`. Ensure Cipi is **4.4.17+** (or a matching `cipi-api` sudoers entry) so database commands do not fail with `sudo: a terminal is required`. See the [Cipi API README](https://github.com/cipi-sh/api/blob/main/README.md).
 
 ---
 
@@ -109,6 +120,7 @@ The bundled `CipiApiClient` covers the entire Cipi REST API surface. Even if a f
    | Git Repository (SSH) | Required for Laravel; optional for custom | —         |
    | Git Branch           | Branch to deploy                          | `main`    |
    | Auto SSL             | Install Let's Encrypt after creation      | No        |
+   | Alias domain (admin) | Hostname for Add/Remove Alias buttons     | —         |
 
 ---
 
@@ -150,7 +162,7 @@ For production use, you should either:
 
 ## Module logging
 
-All API calls are logged via `logModuleCall()` — Create, Terminate, Change Package, SSL, Deploy, Rollback, Unlock, and App Info. Suspend and Unsuspend log a note that no API call was made. Enable **Utilities > Logs > Module Log** in WHMCS Admin for full visibility.
+All API calls are logged via `logModuleCall()` — Create, Terminate, Change Package, SSL, Deploy, Rollback, Unlock, List/Add/Remove Alias, and App Info. Suspend and Unsuspend log a note that no API call was made. Enable **Utilities > Logs > Module Log** in WHMCS Admin for full visibility.
 
 ---
 

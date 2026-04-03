@@ -17,7 +17,8 @@ require_once __DIR__ . '/lib/CipiApiClient.php';
  * - Secure: enable TLS verification (recommended)
  *
  * Token abilities required for full functionality:
- * apps-create, apps-view, apps-delete, apps-edit, deploy-manage, ssl-manage
+ * apps-create, apps-view, apps-delete, apps-edit, deploy-manage, ssl-manage,
+ * aliases-view, aliases-create, aliases-delete, dbs-view, dbs-create, dbs-delete, dbs-manage
  *
  * @see https://github.com/cipi-sh/api
  * @see https://developers.whmcs.com/provisioning-modules/
@@ -29,7 +30,7 @@ function cipi_MetaData(): array
 {
     return [
         'DisplayName' => 'Cipi (Laravel hosting)',
-        'APIVersion' => '1.1',
+        'APIVersion' => '1.6',
         'RequiresServer' => true,
         'DefaultNonSSLPort' => '443',
         'DefaultSSLPort' => '443',
@@ -67,6 +68,12 @@ function cipi_ConfigOptions(): array
             'Type' => 'yesno',
             'Default' => '',
             'Description' => 'Install Let\'s Encrypt SSL automatically after app creation',
+        ],
+        'Alias domain (admin)' => [
+            'Type' => 'text',
+            'Size' => '60',
+            'Default' => '',
+            'Description' => 'For Add/Remove Alias buttons: full hostname (e.g. www.example.com). Save the service before clicking.',
         ],
     ];
 }
@@ -249,6 +256,9 @@ function cipi_AdminCustomButtonArray(): array
         'Deploy' => 'deploy',
         'Rollback Deploy' => 'rollbackDeploy',
         'Unlock Deploy' => 'unlockDeploy',
+        'List Aliases' => 'listAliases',
+        'Add Alias' => 'addAlias',
+        'Remove Alias' => 'removeAlias',
         'App Info' => 'appInfo',
     ];
 }
@@ -335,6 +345,11 @@ function cipi_unlockDeploy(array $params): string
             return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
         }
 
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
+        }
+
         return 'success';
     } catch (Throwable $e) {
         return 'Cipi API error: ' . $e->getMessage();
@@ -354,6 +369,91 @@ function cipi_appInfo(array $params): string
 
         if ($httpCode >= 400) {
             return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($app);
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
+}
+
+function cipi_listAliases(array $params): string
+{
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
+
+        $list = $client->listAliases($appUser);
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('ListAliases', ['app' => $appUser], json_encode($list), $list);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($list);
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
+}
+
+function cipi_addAlias(array $params): string
+{
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
+        $alias = cipi_normalizeAliasDomain((string) ($params['configoption6'] ?? ''));
+        $invalid = cipi_validateAliasDomain($alias);
+        if ($invalid !== null) {
+            return $invalid;
+        }
+
+        $raw = $client->addAlias($appUser, $alias);
+        $decoded = $raw['decoded'];
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('AddAlias', ['app' => $appUser, 'alias' => $alias], $raw['raw'], $decoded);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
+        }
+
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
+}
+
+function cipi_removeAlias(array $params): string
+{
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
+        $alias = cipi_normalizeAliasDomain((string) ($params['configoption6'] ?? ''));
+        $invalid = cipi_validateAliasDomain($alias);
+        if ($invalid !== null) {
+            return $invalid;
+        }
+
+        $raw = $client->removeAlias($appUser, $alias);
+        $decoded = $raw['decoded'];
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('RemoveAlias', ['app' => $appUser, 'alias' => $alias], $raw['raw'], $decoded);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
+        }
+
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
         }
 
         return 'success';
@@ -384,6 +484,51 @@ function cipi_sanitizeAppUser(string $username): string
     }
 
     return $u;
+}
+
+/**
+ * Normalise user input for Cipi alias domains (trim, strip scheme, lowercase ASCII labels).
+ */
+function cipi_normalizeAliasDomain(string $raw): string
+{
+    $s = trim($raw);
+    if ($s === '') {
+        return '';
+    }
+    if (preg_match('#^https?://#i', $s) === 1) {
+        $host = parse_url($s, PHP_URL_HOST);
+        if (is_string($host) && $host !== '') {
+            $s = $host;
+        }
+    }
+    $s = rtrim($s, '/');
+    $s = strtolower($s);
+
+    return $s;
+}
+
+/**
+ * Basic validation before calling the API. Returns an error message or null if OK.
+ */
+function cipi_validateAliasDomain(string $domain): ?string
+{
+    if ($domain === '') {
+        return 'Set "Alias domain (admin)" to the full hostname (e.g. www.example.com), save the service, then use Add/Remove Alias.';
+    }
+    if (strlen($domain) > 253) {
+        return 'Alias domain is too long (max 253 characters).';
+    }
+    if (preg_match('/[\s\x00-\x1f\x7f]/', $domain) === 1) {
+        return 'Alias domain must not contain whitespace or control characters.';
+    }
+    if (preg_match('/^[a-z0-9._-]+$/', $domain) !== 1) {
+        return 'Alias domain contains invalid characters. Use letters, numbers, dots, hyphens, and underscores (punycode for IDN).';
+    }
+    if (! str_contains($domain, '.')) {
+        return 'Alias domain must be a fully qualified hostname (include at least one dot, e.g. www.example.com).';
+    }
+
+    return null;
 }
 
 /**
