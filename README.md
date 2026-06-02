@@ -205,7 +205,7 @@ No Composer dependencies — the module is a self-contained drop-in.
 
 ## Support
 
-This module is **under active development**. For bugs, questions, or custom integrations:
+For bugs, questions, or custom integrations:
 
 **Andrea Pollastri** — [web.ap.it](https://web.ap.it)
 
