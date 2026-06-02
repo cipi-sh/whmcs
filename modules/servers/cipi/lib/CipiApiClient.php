@@ -74,6 +74,18 @@ final class CipiApiClient
         return $this->requestRaw('DELETE', '/api/apps/' . rawurlencode($appName));
     }
 
+    /** @return array{raw: string, decoded: mixed} */
+    public function suspendApp(string $appName): array
+    {
+        return $this->requestRaw('POST', '/api/apps/' . rawurlencode($appName) . '/suspend');
+    }
+
+    /** @return array{raw: string, decoded: mixed} */
+    public function unsuspendApp(string $appName): array
+    {
+        return $this->requestRaw('POST', '/api/apps/' . rawurlencode($appName) . '/unsuspend');
+    }
+
     // ── Deploy ───────────────────────────────────────────────────────
 
     /** @return array{raw: string, decoded: mixed} */

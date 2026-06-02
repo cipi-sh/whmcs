@@ -17,7 +17,7 @@ require_once __DIR__ . '/lib/CipiApiClient.php';
  * - Secure: enable TLS verification (recommended)
  *
  * Token abilities required for full functionality:
- * apps-create, apps-view, apps-delete, apps-edit, deploy-manage, ssl-manage,
+ * apps-create, apps-view, apps-delete, apps-edit, apps-suspend, deploy-manage, ssl-manage,
  * aliases-view, aliases-create, aliases-delete, dbs-view, dbs-create, dbs-delete, dbs-manage
  *
  * @see https://github.com/cipi-sh/api
@@ -167,16 +167,56 @@ function cipi_CreateAccount(array $params): string
 
 function cipi_SuspendAccount(array $params): string
 {
-    cipi_log('SuspendAccount', $params, 'success', 'No Cipi API call (technical suspend not exposed by the API).');
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
 
-    return 'success';
+        $raw = $client->suspendApp($appUser);
+        $decoded = $raw['decoded'];
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('SuspendAccount', ['app' => $appUser], $raw['raw'], $decoded);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
+        }
+
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
 }
 
 function cipi_UnsuspendAccount(array $params): string
 {
-    cipi_log('UnsuspendAccount', $params, 'success', 'No Cipi API call (technical unsuspend not exposed by the API).');
+    try {
+        $client = cipi_buildClient($params);
+        $appUser = cipi_sanitizeAppUser((string) $params['username']);
 
-    return 'success';
+        $raw = $client->unsuspendApp($appUser);
+        $decoded = $raw['decoded'];
+        $httpCode = $client->getLastHttpCode();
+
+        cipi_log('UnsuspendAccount', ['app' => $appUser], $raw['raw'], $decoded);
+
+        if ($httpCode >= 400) {
+            return 'Cipi API returned HTTP ' . $httpCode . cipi_extractApiMessage($decoded);
+        }
+
+        $error = cipi_waitIfAsync($client, $decoded);
+        if ($error !== null) {
+            return $error;
+        }
+
+        return 'success';
+    } catch (Throwable $e) {
+        return 'Cipi API error: ' . $e->getMessage();
+    }
 }
 
 function cipi_TerminateAccount(array $params): string

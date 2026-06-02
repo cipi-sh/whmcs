@@ -21,9 +21,12 @@ This module integrates [Cipi](https://cipi.sh/docs) — a modern Laravel hosting
 | ----------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
 | **Test Connection**     | `GET /api/apps`           | Validates token and API reachability                                                     |
 | **Create Account**      | `POST /api/apps`          | Provisions a Cipi app (Laravel or custom); waits for async jobs; optionally installs SSL |
-| **Suspend / Unsuspend** | _none_                    | Returns success so WHMCS updates billing state (Cipi has no suspend endpoint)            |
+| **Suspend**             | `POST /api/apps/{name}/suspend`   | Takes the app offline (HTTP 503 maintenance page) without deleting it; waits for async jobs |
+| **Unsuspend**           | `POST /api/apps/{name}/unsuspend` | Restores the app's normal Nginx vhost; waits for async jobs                       |
 | **Terminate Account**   | `DELETE /api/apps/{name}` | Removes the app; waits for async jobs                                                    |
 | **Change Package**      | `PUT /api/apps/{name}`    | Updates PHP version, Git repository, or branch                                           |
+
+> **Suspend / Unsuspend** require **Cipi 4.5.8+** (suspend/unsuspend endpoints) and a token with the `apps-suspend` ability. Suspending swaps the app's vhost for a generic HTTP 503 maintenance page; unsuspending restores it.
 
 ### Admin buttons
 
@@ -52,7 +55,7 @@ The bundled `CipiApiClient` covers the entire Cipi REST API surface. Even if a f
 
 | Area          | Methods                                                                                                           |
 | ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Apps**      | `listApps`, `getApp`, `createApp`, `editApp`, `deleteApp`                                                         |
+| **Apps**      | `listApps`, `getApp`, `createApp`, `editApp`, `deleteApp`, `suspendApp`, `unsuspendApp`                          |
 | **Deploy**    | `deployApp`, `rollbackDeploy`, `unlockDeploy`                                                                     |
 | **SSL**       | `installSsl`                                                                                                      |
 | **Aliases**   | `listAliases`, `addAlias`, `removeAlias`                                                                          |
@@ -76,6 +79,7 @@ The bundled `CipiApiClient` covers the entire Cipi REST API surface. Even if a f
   | `apps-view`          | Test Connection, App Info                         |
   | `apps-create`        | Create Account                                  |
   | `apps-edit`          | Change Package                                  |
+  | `apps-suspend`       | Suspend / Unsuspend                             |
   | `apps-delete`        | Terminate Account                               |
   | `deploy-manage`      | Deploy, Rollback, Unlock                        |
   | `ssl-manage`         | Install SSL, Auto-SSL                           |
@@ -162,7 +166,7 @@ For production use, you should either:
 
 ## Module logging
 
-All API calls are logged via `logModuleCall()` — Create, Terminate, Change Package, SSL, Deploy, Rollback, Unlock, List/Add/Remove Alias, and App Info. Suspend and Unsuspend log a note that no API call was made. Enable **Utilities > Logs > Module Log** in WHMCS Admin for full visibility.
+All API calls are logged via `logModuleCall()` — Create, Suspend, Unsuspend, Terminate, Change Package, SSL, Deploy, Rollback, Unlock, List/Add/Remove Alias, and App Info. Enable **Utilities > Logs > Module Log** in WHMCS Admin for full visibility.
 
 ---
 
